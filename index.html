@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IIS Log Viewer — IP &amp; User-Agent Triage</title>
+<meta name="theme-color" content="#14161c">
+<meta name="description" content="Client-side W3C IIS log viewer — filter, sort and search by client IP, user agent, endpoint and time window.">
+<link rel="icon" type="image/svg+xml" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%231c1f28"/><rect x="11" y="37" width="11" height="17" rx="3" fill="%235c6274"/><rect x="26.5" y="12" width="11" height="42" rx="3" fill="%23f0a836"/><rect x="42" y="27" width="11" height="27" rx="3" fill="%235c6274"/></svg>'>
+<style>
+  :root{
+    --bg:#14161c; --panel:#1c1f28; --panel-2:#232733; --line:#2e3342;
+    --text:#d8dce6; --dim:#8a90a2; --faint:#6a7186;
+    --accent:#f0a836; --accent-dim:#8a6320;
+    --ok:#5fb878; --redir:#5b9bd5; --client:#e08a3c; --server:#e05c5c; --other:#6b7280;
+    --mono:ui-monospace,'Cascadia Code','SF Mono',Consolas,'Liberation Mono',monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  @media (prefers-reduced-motion:no-preference){
+    .btn,.chip,.tab,a.link,input,select{transition:background-color .15s ease-out,border-color .15s ease-out,color .15s ease-out,box-shadow .15s ease-out}
+  }
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5;touch-action:manipulation}
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  input,select{font:inherit;color:var(--text);background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 10px;outline:none}
+  input:focus,select:focus{border-color:var(--accent-dim)}
+  input::placeholder{color:var(--faint)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  header{display:flex;align-items:center;gap:14px;padding:12px 22px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand .logo{flex:none;display:block}
+  header h1{font-size:16px;font-weight:600;letter-spacing:.02em;white-space:nowrap}
+  header h1 .amp{color:var(--accent)}
+  header .sub{color:var(--dim);font-size:12.5px}
+  header .spacer{flex:1}
+  .btn{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 12px;font-size:13px;color:var(--text)}
+  .btn:hover{border-color:var(--accent-dim);color:#fff}
+  .btn.primary{background:var(--accent);color:#14161c;border-color:var(--accent);font-weight:600}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn.ghost{color:var(--dim)}
+  .btn:active{transform:translateY(1px)}
+  .btn:disabled{opacity:.45;cursor:default;transform:none}
+  .chip:active,.tab:active{transform:translateY(1px)}
+  @media (prefers-reduced-motion:reduce){ .btn:active,.chip:active,.tab:active{transform:none} }
+
+  /* drop zone */
+  #dropzone{margin:26px auto;max-width:760px;border:1.5px dashed var(--line);border-radius:12px;padding:56px 30px;text-align:center;color:var(--dim);transition:border-color .15s,background .15s}
+  #dropzone.drag{border-color:var(--accent);background:rgba(240,168,54,.05)}
+  #dropzone h2{color:var(--text);font-size:17px;font-weight:600;margin-bottom:8px}
+  #dropzone p{font-size:13px;margin-bottom:4px}
+  #dropzone code{font-family:var(--mono);color:var(--accent);font-size:12.5px}
+  #dropzone .actions{margin-top:18px;display:flex;gap:10px;justify-content:center}
+
+  main{display:none;padding:14px 22px 40px}
+  main.active{display:block}
+
+  /* summary cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+  .card .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint)}
+  .card .v{font-family:var(--mono);font-size:20px;margin-top:2px}
+  .card .v small{font-size:12px;color:var(--dim)}
+  .card.err .v{color:var(--server)}
+
+  /* controls */
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+  .controls input[type=search]{flex:1;min-width:220px;font-family:var(--mono);font-size:13px}
+  .chips{display:flex;gap:6px}
+  .chip{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12.5px;font-family:var(--mono);color:var(--dim)}
+  .chip.on{color:#14161c;font-weight:600}
+  .chip[data-c="2"].on{background:var(--ok);border-color:var(--ok)}
+  .chip[data-c="3"].on{background:var(--redir);border-color:var(--redir)}
+  .chip[data-c="4"].on{background:var(--client);border-color:var(--client)}
+  .chip[data-c="5"].on{background:var(--server);border-color:var(--server)}
+  .chip[data-c="0"].on{background:var(--other);border-color:var(--other)}
+
+  .drill{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+  .drill:empty{display:none}
+  .drill .tag{display:inline-flex;align-items:center;gap:8px;background:rgba(240,168,54,.12);border:1px solid var(--accent-dim);border-radius:6px;padding:3px 10px;font-family:var(--mono);font-size:12px;color:var(--accent);max-width:520px}
+  .drill .tag span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .drill .tag button{color:var(--accent);font-weight:700;font-size:14px;line-height:1}
+
+  /* tabs */
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:0}
+  .tab{padding:8px 16px;font-size:13.5px;color:var(--dim);border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0}
+  .tab:hover{color:var(--text)}
+  .tab.on{color:var(--text);background:var(--panel);border-color:var(--line);box-shadow:inset 0 2px 0 var(--accent)}
+  .tab .n{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-left:6px}
+  .tab.on .n{color:var(--accent)}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-top:none;border-radius:0 0 10px 10px;overflow:auto;max-height:calc(100vh - 320px);min-height:260px}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
+  thead th{position:sticky;top:0;background:var(--panel-2);color:var(--dim);font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap;cursor:pointer;user-select:none;z-index:2}
+  thead th:hover{color:var(--text)}
+  thead th .arrow{color:var(--accent);margin-left:4px}
+  tbody td{padding:6px 12px;border-bottom:1px solid #232733;vertical-align:top;white-space:nowrap}
+  tbody tr:nth-child(even){background:rgba(255,255,255,.015)}
+  tbody tr:hover{background:rgba(240,168,54,.05)}
+  table,.card .v{font-variant-numeric:tabular-nums}
+  td.wrap{white-space:normal;word-break:break-all;max-width:460px}
+  td.num,th.num{text-align:right}
+  .clip{max-width:380px;overflow:hidden;text-overflow:ellipsis}
+  a.link{color:var(--accent);text-decoration:none;cursor:pointer}
+  a.link:hover{text-decoration:underline}
+
+  .st{display:inline-block;min-width:34px;text-align:center;border-radius:4px;padding:1px 6px;font-weight:600;font-size:11.5px}
+  .st.c2{background:rgba(95,184,120,.15);color:var(--ok)}
+  .st.c3{background:rgba(91,155,213,.15);color:var(--redir)}
+  .st.c4{background:rgba(224,138,60,.15);color:var(--client)}
+  .st.c5{background:rgba(224,92,92,.18);color:var(--server)}
+  .st.c0{background:rgba(107,114,128,.18);color:var(--other)}
+
+  /* status mix strip — signature element */
+  .mix{display:flex;width:150px;height:10px;border-radius:3px;overflow:hidden;background:#2a2e3a}
+  .mix i{display:block;height:100%}
+  .mix .m2{background:var(--ok)}.mix .m3{background:var(--redir)}
+  .mix .m4{background:var(--client)}.mix .m5{background:var(--server)}.mix .m0{background:var(--other)}
+
+  .foot{display:flex;align-items:center;gap:14px;padding:10px 4px;color:var(--dim);font-size:12.5px}
+
+  /* timeline */
+  #timeline{margin:2px 0 12px;user-select:none}
+  #timeline:empty{display:none}
+  #timeline svg{display:block;width:100%;height:86px;background:var(--panel);border:1px solid var(--line);border-radius:8px;cursor:crosshair;touch-action:none}
+  #timeline .axis{font:600 11px var(--mono);fill:var(--dim);letter-spacing:.02em}
+  #timeline .cap{font:11px var(--sans);fill:var(--faint);letter-spacing:.03em}
+
+  /* decoded status/substatus */
+  .dec{border-bottom:1px dotted var(--faint);cursor:help}
+  .foot .spacer{flex:1}
+  .pager{display:flex;gap:6px;align-items:center}
+  .empty{padding:50px;text-align:center;color:var(--faint)}
+  #fileInput{display:none}
+  #busy{position:fixed;inset:0;z-index:100;display:flex;gap:12px;align-items:center;justify-content:center;background:rgba(10,12,16,.65);font-size:14px;backdrop-filter:blur(1px)}
+  #busy[hidden]{display:none}
+  .spin{width:20px;height:20px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(1turn)}}
+  @media (prefers-reduced-motion:reduce){ .spin{animation:none;border-top-color:var(--accent)} }
+  .filelist{color:var(--faint);font-size:12px;font-family:var(--mono);margin-left:2px}
+  @media (max-width:860px){
+    header{padding:10px 12px 8px;gap:8px}
+    header .sub{display:none}
+    header .spacer{display:none}
+    .brand{margin-right:auto}
+    header h1{font-size:14.5px}
+    main{padding:10px 10px 30px}
+    .cards{grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+    .card .v{font-size:17px}
+    .controls{gap:8px}
+    .controls input[type=search]{min-width:0;flex:1 1 100%;order:-1;font-size:16px}
+    select{font-size:16px}
+    .chips{flex-wrap:wrap}
+    .filelist{flex-basis:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .tabs{overflow-x:auto;scrollbar-width:none}
+    .tab{padding:8px 12px;white-space:nowrap}
+    .panel{max-height:none}
+    td.wrap{max-width:220px} .clip{max-width:150px}
+    #timeline svg{height:70px}
+    .foot{flex-wrap:wrap;row-gap:6px}
+    .drill .tag{max-width:100%}
+  }
+  @media (pointer:coarse){
+    .btn{padding:9px 14px}
+    .chip{padding:7px 13px}
+    thead th{padding:10px 12px}
+    tbody td{padding:9px 12px}
+  }
+  @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg class="logo" width="22" height="22" viewBox="0 0 64 64" aria-hidden="true">
+      <rect x="8" y="36" width="13" height="22" rx="3.5" fill="var(--faint)"/>
+      <rect x="25.5" y="6" width="13" height="52" rx="3.5" fill="var(--accent)"/>
+      <rect x="43" y="24" width="13" height="34" rx="3.5" fill="var(--faint)"/>
+    </svg>
+    <h1>IIS Log Viewer <span class="amp">/</span> IP &amp; User-Agent Triage</h1>
+  </div>
+  <span class="sub">W3C extended format · parses <code style="font-family:var(--mono)">#Fields</code> per file · runs entirely in your browser</span>
+  <span class="spacer"></span>
+  <button class="btn ghost" id="btnClear" hidden>Clear</button>
+  <button class="btn" id="btnCsv" hidden>Export filtered CSV</button>
+  <button class="btn primary" id="btnAdd">Open log files</button>
+  <input type="file" id="fileInput" multiple accept=".log,.txt,.gz,.zip,.tgz,.tar,text/plain,application/gzip,application/zip,application/x-tar">
+</header>
+
+<div id="busy" hidden role="status"><div class="spin" aria-hidden="true"></div><span id="busyText">Parsing…</span></div>
+
+<div id="dropzone">
+  <h2>Drop IIS log files here</h2>
+  <p>W3C extended format (<code>u_ex*.log</code>) — multiple files supported, fields detected per file.</p>
+  <p><code>.zip</code>, <code>.gz</code> and <code>.tar</code> archives are unpacked automatically.</p>
+  <p>Nothing leaves your machine; parsing is fully client-side.</p>
+  <div class="actions">
+    <button class="btn primary" id="btnBrowse">Browse files</button>
+  </div>
+</div>
+
+<main id="main">
+  <div class="cards" id="cards"></div>
+
+  <div class="controls">
+    <input type="search" id="search" placeholder="Search IP, user agent, URI, referer, username…" aria-label="Search requests">
+    <div class="chips" id="statusChips" title="Filter by status class">
+      <button class="chip on" data-c="2" aria-pressed="true">2xx</button>
+      <button class="chip on" data-c="3" aria-pressed="true">3xx</button>
+      <button class="chip on" data-c="4" aria-pressed="true">4xx</button>
+      <button class="chip on" data-c="5" aria-pressed="true">5xx</button>
+      <button class="chip on" data-c="0" aria-pressed="true">other</button>
+    </div>
+    <select id="methodSel"><option value="">All methods</option></select>
+    <button class="btn" id="tzBtn" aria-pressed="false" title="Toggle timestamp timezone (log files are UTC)">UTC</button>
+    <span class="filelist" id="fileList"></span>
+  </div>
+
+  <div class="drill" id="drill"></div>
+
+  <div id="timeline" title="Drag to select a time window"></div>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="requests">Requests <span class="n" id="nReq"></span></button>
+    <button class="tab" data-tab="ips">IP addresses <span class="n" id="nIp"></span></button>
+    <button class="tab" data-tab="uas">User agents <span class="n" id="nUa"></span></button>
+    <button class="tab" data-tab="eps">Endpoints <span class="n" id="nEp"></span></button>
+  </div>
+  <div class="panel" id="panel"></div>
+  <div class="foot" id="foot"></div>
+</main>
+
+<script>
+'use strict';
+/* ---------- state ---------- */
+let rows = [];                 // parsed request rows
+let files = [];                // file names loaded
+let tab = 'requests';
+let query = '';
+let classes = new Set(['2','3','4','5','0']);
+let method = '';
+let drillIp = null, drillUa = null, drillUri = null;
+let timeLo = null, timeHi = null;   // ms epoch, inclusive window from timeline drag
+let sort = { requests:{key:'ts',dir:1}, ips:{key:'count',dir:-1}, uas:{key:'count',dir:-1}, eps:{key:'count',dir:-1} };
+let page = 0; const PAGE = 200;
+
+/* ---------- IIS status.substatus + Win32 decode tables ---------- */
+const SUB = {
+'400.1':'Invalid Destination header','400.2':'Invalid Depth header','401.1':'Logon failed','401.2':'Logon failed due to server configuration','401.3':'Unauthorised due to ACL on resource','401.4':'Authorisation failed by filter','401.5':'Authorisation failed by ISAPI/CGI application',
+'403.1':'Execute access forbidden','403.2':'Read access forbidden','403.3':'Write access forbidden','403.4':'SSL required','403.5':'SSL 128-bit required','403.6':'IP address rejected','403.7':'Client certificate required','403.8':'Site access denied (DNS)','403.12':'Mapper denied access','403.13':'Client certificate revoked','403.14':'Directory listing denied','403.16':'Client certificate untrusted or invalid','403.17':'Client certificate expired or not yet valid','403.18':'Cannot execute request from this application pool','403.19':'Cannot execute CGIs in this application pool','403.502':'Dynamic IP restriction: too many requests',
+'404.0':'Not found','404.2':'ISAPI or CGI restriction','404.3':'MIME type restriction','404.4':'No handler configured','404.5':'Request filtering: denied URL sequence','404.6':'Request filtering: verb denied','404.7':'Request filtering: file extension denied','404.8':'Request filtering: hidden namespace','404.9':'Hidden file attribute','404.10':'Request header too long','404.11':'Request filtering: double escaping','404.12':'Request filtering: high-bit characters','404.13':'Content length too large','404.14':'URL too long','404.15':'Query string too long','404.17':'Dynamic content mapped to static handler','404.19':'Denied by filtering rule',
+'405.0':'Method not allowed','406.0':'Invalid MIME type','412.0':'Precondition failed',
+'500.0':'Module or ISAPI error','500.11':'Application is shutting down','500.12':'Application busy restarting','500.13':'Server too busy','500.15':'Direct request for global.asax not allowed','500.19':'Configuration data is invalid','500.21':'Module not recognised','500.22':'ASP.NET httpModules config invalid in Managed Pipeline mode','500.23':'ASP.NET httpHandlers config invalid in Managed Pipeline mode','500.24':'ASP.NET impersonation config invalid in Managed Pipeline mode','500.50':'URL rewrite error (inbound)','500.100':'Internal ASP error',
+'501.0':'Not implemented','502.1':'CGI application timeout','502.2':'Bad gateway: premature exit','502.3':'Bad gateway: forwarder connection error (ARR)','502.4':'Bad gateway: no server (ARR)',
+'503.0':'Application pool unavailable','503.2':'Concurrent request limit exceeded','503.3':'ASP.NET queue full','503.4':'FastCGI queue full'};
+const WIN32 = {
+'0':'Success','2':'File not found','3':'Path not found','5':'Access denied','32':'File in use by another process','64':'Network name deleted — client disconnected','121':'Semaphore timeout','258':'Wait operation timed out','995':'Operation aborted — client cancelled or connection closed','1229':'Connection nonexistent','1236':'Connection aborted by local system','1450':'Insufficient system resources','2147943453':'Logon failure (0x8007052E)','2148074252':'No credentials available (SEC_E)','2148074254':'No authenticating authority contacted'};
+const decSub = r => (r.status && r.sub !== '') ? SUB[r.status + '.' + r.sub] : undefined;
+
+const $ = s => document.querySelector(s);
+let useLocal = false;
+const pad = n => String(n).padStart(2,'0');
+function dtP(ts){
+  const d = new Date(ts);
+  return useLocal
+    ? {y:d.getFullYear(), mo:d.getMonth()+1, da:d.getDate(), h:d.getHours(), mi:d.getMinutes(), s:d.getSeconds()}
+    : {y:d.getUTCFullYear(), mo:d.getUTCMonth()+1, da:d.getUTCDate(), h:d.getUTCHours(), mi:d.getUTCMinutes(), s:d.getUTCSeconds()};
+}
+const fDate = ts => { const p = dtP(ts); return p.y+'-'+pad(p.mo)+'-'+pad(p.da); };
+const fTime = ts => { const p = dtP(ts); return pad(p.h)+':'+pad(p.mi)+':'+pad(p.s); };
+const fShort = (ts, sec) => { const p = dtP(ts); return pad(p.mo)+'-'+pad(p.da)+' '+pad(p.h)+':'+pad(p.mi)+(sec?':'+pad(p.s):''); };
+function tzLabel(){
+  if (!useLocal) return 'UTC';
+  const off = -new Date().getTimezoneOffset(), s = off >= 0 ? '+' : '-', a = Math.abs(off);
+  return 'UTC' + s + Math.floor(a/60) + (a%60 ? ':'+pad(a%60) : '');
+}
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = n => n.toLocaleString('en-AU');
+
+/* ---------- parsing ---------- */
+function parseText(text, fname){
+  const out = [];
+  let map = null; // field name -> index
+  for (const raw of text.split(/\r?\n/)){
+    const line = raw.trim();
+    if (!line) continue;
+    if (line[0] === '#'){
+      if (line.startsWith('#Fields:')){
+        map = {};
+        line.slice(8).trim().split(/\s+/).forEach((f,i)=> map[f.toLowerCase()] = i);
+      }
+      continue;
+    }
+    if (!map) continue;
+    const p = line.split(' ');
+    const g = f => { const i = map[f]; return (i === undefined || p[i] === undefined) ? '' : p[i]; };
+    const dash = v => v === '-' ? '' : v;
+    const date = g('date'), time = g('time');
+    const ua = dash(g('cs(user-agent)')).replace(/\+/g,' ');
+    const status = dash(g('sc-status'));
+    out.push({
+      date, time,
+      ts: Date.parse((date && time) ? date + 'T' + time + 'Z' : '') || 0,
+      sip: dash(g('s-ip')),
+      method: dash(g('cs-method')),
+      uri: dash(g('cs-uri-stem')),
+      qs: dash(g('cs-uri-query')),
+      port: dash(g('s-port')),
+      user: dash(g('cs-username')),
+      ip: dash(g('c-ip')),
+      ua,
+      ref: dash(g('cs(referer)')).replace(/\+/g,' '),
+      status,
+      cls: /^[2-5]/.test(status) ? status[0] : '0',
+      sub: dash(g('sc-substatus')),
+      win32: dash(g('sc-win32-status')),
+      tt: parseInt(g('time-taken'),10) || 0,
+      bytes: parseInt(g('sc-bytes'),10) || 0,
+      file: fname
+    });
+  }
+  return out;
+}
+
+/* ---------- archive intake (.gz / .zip / .tar) ---------- */
+const td = new TextDecoder();
+async function decompress(u8, format){
+  const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream(format));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+const looksLikeTar = u8 => u8.length > 262 && td.decode(u8.subarray(257, 262)) === 'ustar';
+function parseTar(u8){
+  const entries = [];
+  let o = 0;
+  while (o + 512 <= u8.length){
+    const name = td.decode(u8.subarray(o, o + 100)).replace(/\0.*$/, '');
+    if (!name) break;
+    const size = parseInt(td.decode(u8.subarray(o + 124, o + 136)).replace(/\0.*$/, '').trim(), 8) || 0;
+    const type = String.fromCharCode(u8[o + 156]);
+    if (type === '0' || type === '\0' || type === '') entries.push({name, data: u8.subarray(o + 512, o + 512 + size)});
+    o += 512 + Math.ceil(size / 512) * 512;
+  }
+  return entries;
+}
+async function unzip(u8){
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  // find End Of Central Directory record (scan back through max comment length)
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 22 - 65535); i--){
+    if (dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip file');
+  const count = dv.getUint16(eocd + 10, true);
+  let o = dv.getUint32(eocd + 16, true);
+  const entries = [];
+  for (let i = 0; i < count; i++){
+    if (dv.getUint32(o, true) !== 0x02014b50) break;
+    const method = dv.getUint16(o + 10, true),
+          compSize = dv.getUint32(o + 20, true),
+          nameLen = dv.getUint16(o + 28, true),
+          extraLen = dv.getUint16(o + 30, true),
+          commentLen = dv.getUint16(o + 32, true),
+          localOff = dv.getUint32(o + 42, true),
+          name = td.decode(u8.subarray(o + 46, o + 46 + nameLen));
+    o += 46 + nameLen + extraLen + commentLen;
+    if (name.endsWith('/')) continue;                       // directory
+    if (compSize === 0xFFFFFFFF || localOff === 0xFFFFFFFF) // zip64
+      { entries.push({name, err: 'zip64 not supported'}); continue; }
+    const lnl = dv.getUint16(localOff + 26, true), lel = dv.getUint16(localOff + 28, true);
+    const start = localOff + 30 + lnl + lel;
+    const comp = u8.subarray(start, start + compSize);
+    if (method === 0) entries.push({name, data: comp});
+    else if (method === 8) entries.push({name, data: await decompress(comp, 'deflate-raw')});
+    else entries.push({name, err: 'unsupported compression method ' + method});
+  }
+  return entries;
+}
+async function extractTexts(f){
+  const n = f.name.toLowerCase();
+  const isGz = n.endsWith('.gz') || n.endsWith('.tgz'),
+        isZip = n.endsWith('.zip'), isTar = n.endsWith('.tar');
+  if (!isGz && !isZip && !isTar) return [{name: f.name, text: await f.text()}];
+  if (!window.DecompressionStream){
+    files.push(f.name + " (this browser can't unpack archives — extract it first)"); return [];
+  }
+  try {
+    const buf = new Uint8Array(await f.arrayBuffer());
+    let entries;
+    if (isZip) entries = await unzip(buf);
+    else {
+      const data = isGz ? await decompress(buf, 'gzip') : buf;
+      entries = (isTar || n.endsWith('.tar.gz') || n.endsWith('.tgz') || looksLikeTar(data))
+        ? parseTar(data)
+        : [{name: f.name.replace(/\.gz$/i, ''), data}];
+    }
+    const out = [];
+    let skipped = 0;
+    for (const e of entries){
+      if (e.err){ files.push(f.name + ' → ' + e.name + ' (' + e.err + ')'); continue; }
+      if (!/\.(log|txt)$/i.test(e.name)){ skipped++; continue; }
+      out.push({name: f.name + ' → ' + e.name.split('/').pop(), text: td.decode(e.data)});
+    }
+    if (!out.length) files.push(f.name + ' (no .log/.txt entries' + (skipped ? ' — ' + skipped + ' other file' + (skipped>1?'s':'') + ' skipped' : '') + ')');
+    return out;
+  } catch (err){
+    files.push(f.name + " (couldn't unpack: " + err.message + ')');
+    return [];
+  }
+}
+
+async function loadFiles(list){
+  if (!list.length) return;
+  const busy = $('#busy');
+  $('#busyText').textContent = 'Parsing ' + list.length + (list.length > 1 ? ' files…' : ' file…');
+  busy.hidden = false;
+  $('#btnAdd').disabled = true; $('#btnBrowse').disabled = true;
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30))); // let the overlay paint
+  try {
+    for (const f of list){
+      for (const t of await extractTexts(f)){
+        const parsed = parseText(t.text, t.name);
+        if (parsed.length){ rows = rows.concat(parsed); files.push(t.name + ' (' + fmt(parsed.length) + ')'); }
+        else files.push(t.name + ' (no data rows — is it W3C format with a #Fields line?)');
+      }
+    }
+    if (rows.length) activate();
+    else if ($('#main').classList.contains('active')) activate();   // refresh file notes
+    else {
+      let note = $('#dzNote');
+      if (!note){ note = document.createElement('p'); note.id = 'dzNote'; note.style.cssText = 'margin-top:14px;color:var(--client)'; $('#dropzone').appendChild(note); }
+      note.textContent = files[files.length - 1] || 'Nothing readable in that file.';
+    }
+  } finally {
+    busy.hidden = true;
+    $('#btnAdd').disabled = false; $('#btnBrowse').disabled = false;
+  }
+}
+
+/* ---------- filtering ---------- */
+function baseMatch(r){
+  const q = query.toLowerCase();
+  return classes.has(r.cls) &&
+    (!method || r.method === method) &&
+    (!drillIp || r.ip === drillIp) &&
+    (!drillUa || r.ua === drillUa) &&
+    (!drillUri || r.uri === drillUri) &&
+    (!q || r.ip.toLowerCase().includes(q) || r.ua.toLowerCase().includes(q) ||
+      r.uri.toLowerCase().includes(q) || r.qs.toLowerCase().includes(q) ||
+      r.ref.toLowerCase().includes(q) || r.user.toLowerCase().includes(q) ||
+      r.status.includes(q));
+}
+function filteredNoTime(){ return rows.filter(baseMatch); }
+function filtered(){
+  return rows.filter(r => baseMatch(r) &&
+    (timeLo === null || (r.ts && r.ts >= timeLo && r.ts <= timeHi)));
+}
+
+function aggregate(list, keyFn, altFn){
+  altFn = altFn || (r => r.uri);
+  const m = new Map();
+  for (const r of list){
+    const k = keyFn(r); if (!k) continue;
+    let a = m.get(k);
+    if (!a){ a = {key:k,count:0,c2:0,c3:0,c4:0,c5:0,c0:0,alts:new Map(),tts:[],tt:0,first:Infinity,last:0}; m.set(k,a); }
+    a.count++; a['c'+r.cls]++;
+    a.tt += r.tt; a.tts.push(r.tt);
+    if (r.ts){ if (r.ts < a.first) a.first = r.ts; if (r.ts > a.last) a.last = r.ts; }
+    const alt = altFn(r);
+    if (alt) a.alts.set(alt, (a.alts.get(alt)||0)+1);
+  }
+  return [...m.values()].map(a => {
+    let top='',topN=0; for (const [p,n] of a.alts) if (n>topN){top=p;topN=n;}
+    a.tts.sort((x,y)=>x-y);
+    const p95 = a.tts.length ? a.tts[Math.min(a.tts.length-1, Math.ceil(a.tts.length*0.95)-1)] : 0;
+    return {...a, err:a.c4+a.c5, errPct:a.count?(a.c4+a.c5)/a.count*100:0,
+            avgTt:a.count?Math.round(a.tt/a.count):0, p95, topAlt:top,
+            span:(a.first!==Infinity&&a.last)?a.last-a.first:0};
+  });
+}
+
+/* ---------- rendering ---------- */
+function activate(){
+  $('#dropzone').style.display = 'none';
+  $('#main').classList.add('active');
+  $('#btnCsv').hidden = false; $('#btnClear').hidden = false;
+  // method dropdown
+  const methods = [...new Set(rows.map(r=>r.method).filter(Boolean))].sort();
+  $('#methodSel').innerHTML = '<option value="">All methods</option>' +
+    methods.map(m=>`<option${m===method?' selected':''}>${esc(m)}</option>`).join('');
+  $('#fileList').textContent = files.join('  ·  ');
+  render();
+}
+
+function render(){
+  const list = filtered();
+  renderCards(list);
+  renderDrill();
+  renderTimeline();
+  $('#nReq').textContent = fmt(list.length);
+  const ips = aggregate(list, r=>r.ip), uas = aggregate(list, r=>r.ua),
+        eps = aggregate(list, r=>r.uri, r=>r.ip);
+  $('#nIp').textContent = fmt(ips.length);
+  $('#nUa').textContent = fmt(uas.length);
+  $('#nEp').textContent = fmt(eps.length);
+  if (tab === 'requests') renderRequests(list);
+  else if (tab === 'ips') renderAgg(ips, 'IP address', 'ip', 'Top path');
+  else if (tab === 'uas') renderAgg(uas, 'User agent', 'ua', 'Top path');
+  else renderAgg(eps, 'Endpoint (cs-uri-stem)', 'uri', 'Top client IP');
+}
+
+function renderCards(list){
+  const uIp = new Set(list.map(r=>r.ip).filter(Boolean)).size;
+  const uUa = new Set(list.map(r=>r.ua).filter(Boolean)).size;
+  const err = list.filter(r=>r.cls==='4'||r.cls==='5').length;
+  const s5 = list.filter(r=>r.cls==='5').length;
+  let lo=Infinity, hi=0;
+  for (const r of list){ if(r.ts){ if(r.ts<lo)lo=r.ts; if(r.ts>hi)hi=r.ts; } }
+  const range = (lo!==Infinity&&hi) ? fShort(lo)+' → '+fShort(hi)+' '+tzLabel() : '—';
+  $('#cards').innerHTML = `
+    <div class="card"><div class="k">Requests (filtered)</div><div class="v">${fmt(list.length)} <small>of ${fmt(rows.length)}</small></div></div>
+    <div class="card"><div class="k">Unique client IPs</div><div class="v">${fmt(uIp)}</div></div>
+    <div class="card"><div class="k">Unique user agents</div><div class="v">${fmt(uUa)}</div></div>
+    <div class="card err"><div class="k">4xx + 5xx</div><div class="v">${fmt(err)} <small>${list.length?(err/list.length*100).toFixed(1):'0'}%</small></div></div>
+    <div class="card err"><div class="k">5xx only</div><div class="v">${fmt(s5)}</div></div>
+    <div class="card"><div class="k">Time range</div><div class="v" style="font-size:13px;line-height:2">${esc(range)}</div></div>`;
+}
+
+function renderDrill(){
+  let h = '';
+  if (drillIp) h += `<span class="tag">c-ip = <span>${esc(drillIp)}</span><button data-x="ip" aria-label="Remove IP filter">×</button></span>`;
+  if (drillUa) h += `<span class="tag">user-agent = <span>${esc(drillUa)}</span><button data-x="ua" aria-label="Remove UA filter">×</button></span>`;
+  if (drillUri) h += `<span class="tag">uri-stem = <span>${esc(drillUri)}</span><button data-x="uri" aria-label="Remove endpoint filter">×</button></span>`;
+  if (timeLo !== null){
+    h += `<span class="tag">time = <span>${fShort(timeLo,1)} → ${fShort(timeHi,1)} ${tzLabel()}</span><button data-x="time" aria-label="Remove time filter">×</button></span>`;
+  }
+  $('#drill').innerHTML = h;
+}
+
+/* ---------- timeline ---------- */
+let tlMeta = null; // {lo, hi, w} for x<->time mapping
+function renderTimeline(){
+  const el = $('#timeline');
+  const list = filteredNoTime().filter(r => r.ts);
+  if (list.length < 2){ el.innerHTML = ''; tlMeta = null; return; }
+  let lo = Infinity, hi = 0;
+  for (const r of list){ if (r.ts < lo) lo = r.ts; if (r.ts > hi) hi = r.ts; }
+  if (hi <= lo){ el.innerHTML = ''; tlMeta = null; return; }
+  const W = Math.max(360, el.clientWidth || el.parentElement.clientWidth || 1000),
+        narrow = W < 560,
+        H = narrow ? 70 : 86, plotH = narrow ? 42 : 56, top = 6,
+        N = Math.min(160, Math.max(48, Math.floor(W / 9)));
+  const bw = W / N, span = hi - lo;
+  const buckets = Array.from({length: N}, () => ({c2:0,c3:0,c4:0,c5:0,c0:0,n:0}));
+  for (const r of list){
+    const b = buckets[Math.min(N-1, Math.floor((r.ts - lo) / span * N))];
+    b['c'+r.cls]++; b.n++;
+  }
+  const max = Math.max(...buckets.map(b => b.n)) || 1;
+  const order = [['c2','var(--ok)'],['c3','var(--redir)'],['c0','var(--other)'],['c4','var(--client)'],['c5','var(--server)']];
+  let bars = '';
+  buckets.forEach((b, i) => {
+    if (!b.n) return;
+    let y = top + plotH;
+    for (const [k, col] of order){
+      if (!b[k]) continue;
+      const h = b[k] / max * plotH;
+      y -= h;
+      bars += `<rect x="${(i*bw+0.5).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw-1).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
+    }
+  });
+  const t2x = ts => (ts - lo) / span * W;
+  const fT = ts => fShort(ts);
+  let sel = '';
+  if (timeLo !== null){
+    const x1 = Math.max(0, t2x(timeLo)), x2 = Math.min(W, t2x(timeHi));
+    sel = `<rect id="tlSel" x="${x1.toFixed(1)}" y="0" width="${Math.max(1,(x2-x1)).toFixed(1)}" height="${top+plotH}" fill="rgba(240,168,54,.14)" stroke="var(--accent)" stroke-width="1"/>`;
+  }
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Requests over time">
+    <line x1="0" y1="${top+plotH}" x2="${W}" y2="${top+plotH}" stroke="var(--line)"/>
+    ${bars}${sel}
+    <rect id="tlDrag" x="0" y="0" width="0" height="${top+plotH}" fill="rgba(240,168,54,.18)" stroke="var(--accent)" stroke-width="1" visibility="hidden"/>
+    <text class="axis" x="6" y="${H-7}">${fT(lo)}</text>
+    ${narrow?'':`<text class="axis" x="${W/2}" y="${H-7}" text-anchor="middle">${fT(lo+span/2)}</text>`}
+    <text class="axis" x="${W-6}" y="${H-7}" text-anchor="end">${fT(hi)} ${tzLabel()}</text>
+    ${timeLo===null?`<text class="cap" x="${W-8}" y="${top+12}" text-anchor="end">drag to select a time window</text>`:''}
+  </svg>`;
+  tlMeta = { lo, hi, span, W };
+  attachTimelineDrag(el.querySelector('svg'));
+}
+
+function attachTimelineDrag(svg){
+  let x0 = null;
+  const toX = e => {
+    const r = svg.getBoundingClientRect();
+    return Math.max(0, Math.min(tlMeta.W, (e.clientX - r.left) / r.width * tlMeta.W));
+  };
+  svg.addEventListener('pointerdown', e => {
+    x0 = toX(e); svg.setPointerCapture(e.pointerId);
+    const d = svg.querySelector('#tlDrag');
+    d.setAttribute('x', x0); d.setAttribute('width', 0); d.setAttribute('visibility','visible');
+  });
+  svg.addEventListener('pointermove', e => {
+    if (x0 === null) return;
+    const x = toX(e), d = svg.querySelector('#tlDrag');
+    d.setAttribute('x', Math.min(x0, x)); d.setAttribute('width', Math.abs(x - x0));
+  });
+  svg.addEventListener('pointerup', e => {
+    if (x0 === null || !tlMeta) return;
+    const x1 = Math.min(x0, toX(e)), x2 = Math.max(x0, toX(e));
+    x0 = null;
+    if (x2 - x1 < 4){ // treat as a click: clear window
+      if (timeLo !== null){ timeLo = timeHi = null; page = 0; render(); }
+      else svg.querySelector('#tlDrag').setAttribute('visibility','hidden');
+      return;
+    }
+    timeLo = Math.round(tlMeta.lo + x1/tlMeta.W * tlMeta.span);
+    timeHi = Math.round(tlMeta.lo + x2/tlMeta.W * tlMeta.span);
+    page = 0; render();
+  });
+  svg.addEventListener('pointercancel', () => { x0 = null; });
+}
+
+function th(label, key, cur, numeric){
+  const arrow = cur.key===key ? `<span class="arrow">${cur.dir===1?'▲':'▼'}</span>` : '';
+  const aria = cur.key===key ? (cur.dir===1?'ascending':'descending') : 'none';
+  return `<th scope="col" data-k="${key}"${numeric?' class="num"':''} aria-sort="${aria}">${label}${arrow}</th>`;
+}
+function sortBy(list, s){
+  const k=s.key, d=s.dir;
+  return list.sort((a,b)=>{
+    const x=a[k], y=b[k];
+    if (typeof x==='number'&&typeof y==='number') return (x-y)*d;
+    return String(x).localeCompare(String(y))*d;
+  });
+}
+
+function renderRequests(list){
+  const s = sort.requests;
+  sortBy(list, s);
+  const total = list.length, pages = Math.max(1, Math.ceil(total/PAGE));
+  if (page >= pages) page = pages-1;
+  const slice = list.slice(page*PAGE, page*PAGE+PAGE);
+  let h = `<table><thead><tr>${
+    th('Date','date',s)+th('Time','time',s)+th('Client IP','ip',s)+th('Method','method',s)+
+    th('URI','uri',s)+th('Status','status',s)+th('Sub','sub',s)+th('Win32','win32',s)+
+    th('Time (ms)','tt',s,true)+th('User agent','ua',s)+th('Referer','ref',s)
+  }</tr></thead><tbody>`;
+  for (const r of slice){
+    const sd = decSub(r), wd = r.win32 !== '' ? WIN32[r.win32] : undefined;
+    h += `<tr><td>${r.ts?fDate(r.ts):esc(r.date)}</td><td>${r.ts?fTime(r.ts):esc(r.time)}</td>
+      <td><a class="link" data-ip="${esc(r.ip)}">${esc(r.ip)||'—'}</a></td>
+      <td>${esc(r.method)}</td>
+      <td class="wrap"><a class="link" data-uri="${esc(r.uri)}">${esc(r.uri)}</a>${r.qs?'<span style="color:var(--faint)">?'+esc(r.qs)+'</span>':''}</td>
+      <td><span class="st c${r.cls}${sd?' dec':''}"${sd?` title="${esc(r.status+'.'+r.sub+' — '+sd)}"`:''}>${esc(r.status)||'—'}</span></td>
+      <td>${sd?`<span class="dec" title="${esc(sd)}">${esc(r.sub)}</span>`:esc(r.sub)}</td>
+      <td>${wd&&r.win32!=='0'?`<span class="dec" title="${esc(wd)}">${esc(r.win32)}</span>`:esc(r.win32)}</td>
+      <td class="num">${fmt(r.tt)}</td>
+      <td class="wrap" style="max-width:340px"><a class="link" data-ua="${esc(r.ua)}">${esc(r.ua)||'—'}</a></td>
+      <td class="clip" title="${esc(r.ref)}">${esc(r.ref)}</td></tr>`;
+  }
+  h += '</tbody></table>';
+  if (!total) h = '<div class="empty">No requests match the current filters.</div>';
+  $('#panel').innerHTML = h;
+  $('#foot').innerHTML = total ? `Showing ${fmt(page*PAGE+1)}–${fmt(Math.min(total,(page+1)*PAGE))} of ${fmt(total)} · click an IP or user agent to drill in
+    <span class="spacer"></span>
+    <span class="pager">
+      <button class="btn" id="pgPrev" ${page===0?'disabled':''}>‹ Prev</button>
+      <span>page ${page+1} / ${pages}</span>
+      <button class="btn" id="pgNext" ${page>=pages-1?'disabled':''}>Next ›</button>
+    </span>` : '';
+  const pv=$('#pgPrev'), nx=$('#pgNext');
+  if (pv) pv.onclick = ()=>{ page--; renderRequests(filtered()); };
+  if (nx) nx.onclick = ()=>{ page++; renderRequests(filtered()); };
+}
+
+function mixBar(a){
+  const segs = [['m2',a.c2],['m3',a.c3],['m4',a.c4],['m5',a.c5],['m0',a.c0]].filter(x=>x[1]>0);
+  return `<div class="mix" title="2xx ${a.c2} · 3xx ${a.c3} · 4xx ${a.c4} · 5xx ${a.c5} · other ${a.c0}">${
+    segs.map(([c,n])=>`<i class="${c}" style="flex:${n}"></i>`).join('')}</div>`;
+}
+
+function renderAgg(list, label, kind, altLabel){
+  const s = sort[kind==='ip' ? 'ips' : (kind==='ua' ? 'uas' : 'eps')];
+  sortBy(list, s);
+  const slice = list.slice(0, 1000);
+  let h = `<table><thead><tr>${
+    th(label,'key',s)+th('Requests','count',s,true)+'<th>Status mix</th>'+
+    th('Errors','err',s,true)+th('Err %','errPct',s,true)+
+    th('Avg ms','avgTt',s,true)+th('p95 ms','p95',s,true)+
+    th('First seen','first',s)+th('Last seen','last',s)+
+    th(altLabel,'topAlt',s)
+  }</tr></thead><tbody>`;
+  for (const a of slice){
+    const t = ts => (ts && ts!==Infinity) ? fShort(ts) : '—';
+    h += `<tr><td class="wrap" style="max-width:${kind==='ip'?'180':'420'}px">
+        <a class="link" data-${kind}="${esc(a.key)}">${esc(a.key)}</a></td>
+      <td class="num">${fmt(a.count)}</td><td>${mixBar(a)}</td>
+      <td class="num">${fmt(a.err)}</td>
+      <td class="num"${a.errPct>=25?' style="color:var(--server)"':''}>${a.errPct.toFixed(1)}%</td>
+      <td class="num">${fmt(a.avgTt)}</td><td class="num">${fmt(a.p95)}</td>
+      <td>${t(a.first)}</td><td>${t(a.last)}</td>
+      <td class="clip" title="${esc(a.topAlt)}">${esc(a.topAlt)}</td></tr>`;
+  }
+  h += '</tbody></table>';
+  if (!list.length) h = '<div class="empty">Nothing matches the current filters.</div>';
+  $('#panel').innerHTML = h;
+  const noun = kind==='ip' ? 'IPs' : (kind==='ua' ? 'user agents' : 'endpoints');
+  $('#foot').innerHTML = `${fmt(list.length)} unique ${noun}${list.length>1000?' (showing top 1,000 by current sort)':''} · click one to see its requests`;
+}
+
+/* ---------- CSV export ---------- */
+function exportCsv(){
+  const list = filtered();
+  const cols = ['date','time','ip','method','uri','qs','status','sub','win32','tt','ua','ref','user','file'];
+  const csv = [cols.join(',')].concat(list.map(r =>
+    cols.map(c => { const v = String(r[c] ?? ''); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }).join(',')
+  )).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download = 'iis-filtered-' + new Date().toISOString().slice(0,19).replace(/[:T]/g,'-') + '.csv';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+/* ---------- events ---------- */
+$('#btnAdd').onclick = ()=> $('#fileInput').click();
+$('#btnBrowse').onclick = ()=> $('#fileInput').click();
+$('#fileInput').onchange = e => { loadFiles([...e.target.files]); e.target.value=''; };
+$('#btnCsv').onclick = exportCsv;
+$('#btnClear').onclick = ()=>{
+  rows=[]; files=[]; drillIp=drillUa=drillUri=null; timeLo=timeHi=null; query=''; method=''; page=0;
+  $('#search').value=''; $('#main').classList.remove('active');
+  $('#dropzone').style.display='block'; $('#btnCsv').hidden=true; $('#btnClear').hidden=true;
+};
+
+const dz = $('#dropzone');
+['dragover','dragenter'].forEach(ev => document.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add('drag'); }));
+['dragleave','drop'].forEach(ev => document.addEventListener(ev, e=>{ e.preventDefault(); if(ev==='dragleave'&&e.target!==document.documentElement&&e.relatedTarget)return; dz.classList.remove('drag'); }));
+document.addEventListener('drop', e => { if (e.dataTransfer.files.length) loadFiles([...e.dataTransfer.files]); });
+
+let rsDebounce;
+window.addEventListener('resize', () => {
+  clearTimeout(rsDebounce);
+  rsDebounce = setTimeout(() => { if (rows.length) renderTimeline(); }, 150);
+});
+
+let debounce;
+$('#search').addEventListener('input', e => {
+  clearTimeout(debounce);
+  debounce = setTimeout(()=>{ query = e.target.value.trim(); page=0; render(); }, 150);
+});
+$('#statusChips').addEventListener('click', e => {
+  const b = e.target.closest('.chip'); if (!b) return;
+  const c = b.dataset.c;
+  if (classes.has(c) && classes.size===1){ classes = new Set(['2','3','4','5','0']); } // re-expand
+  else if (classes.has(c)) classes.delete(c); else classes.add(c);
+  document.querySelectorAll('.chip').forEach(x => {
+    const on = classes.has(x.dataset.c);
+    x.classList.toggle('on', on);
+    x.setAttribute('aria-pressed', on);
+  });
+  page=0; render();
+});
+$('#methodSel').onchange = e => { method = e.target.value; page=0; render(); };
+$('#tzBtn').onclick = () => {
+  useLocal = !useLocal;
+  const b = $('#tzBtn');
+  b.textContent = useLocal ? tzLabel() : 'UTC';
+  b.setAttribute('aria-pressed', useLocal);
+  b.title = useLocal
+    ? 'Showing local time (' + Intl.DateTimeFormat().resolvedOptions().timeZone + ') — click for UTC'
+    : 'Showing UTC (as logged) — click for local time';
+  if (rows.length) render();
+};
+document.querySelector('.tabs').addEventListener('click', e => {
+  const b = e.target.closest('.tab'); if (!b) return;
+  tab = b.dataset.tab; page=0;
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on', x===b));
+  render();
+});
+$('#panel').addEventListener('click', e => {
+  const a = e.target.closest('a.link'); if (!a) return;
+  if (a.dataset.ip !== undefined){ drillIp = a.dataset.ip; tab='requests'; }
+  if (a.dataset.ua !== undefined){ drillUa = a.dataset.ua; tab='requests'; }
+  if (a.dataset.uri !== undefined){ drillUri = a.dataset.uri; tab='requests'; }
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on', x.dataset.tab==='requests'));
+  page=0; render();
+});
+$('#panel').addEventListener('click', e => {
+  const h = e.target.closest('th[data-k]'); if (!h) return;
+  const s = sort[tab] || sort.requests;
+  if (s.key === h.dataset.k) s.dir *= -1; else { s.key = h.dataset.k; s.dir = tab==='requests'?1:-1; }
+  render();
+});
+$('#drill').addEventListener('click', e => {
+  const b = e.target.closest('button[data-x]'); if (!b) return;
+  if (b.dataset.x==='ip') drillIp=null;
+  else if (b.dataset.x==='ua') drillUa=null;
+  else if (b.dataset.x==='uri') drillUri=null;
+  else { timeLo=null; timeHi=null; }
+  page=0; render();
+});
+
+</script>
+</body>
+</html>
