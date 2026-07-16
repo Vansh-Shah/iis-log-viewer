@@ -25,12 +25,12 @@ Drop one or more IIS log files (W3C extended format) into the page and explore t
 
 ## Usage
 
-**Online:** open the [GitHub Pages site](https://YOUR-USERNAME.github.io/iis-log-viewer/) *(update this link after enabling Pages)*.
+**Online:** open the [GitHub Pages site](https://vansh-shah.github.io/iis-log-viewer/).
 
 **Offline:** clone or download the repo and open `index.html` in any modern browser. Works from a file share or a locked-down support workstation — no network access required.
 
 ```
-git clone https://github.com/YOUR-USERNAME/iis-log-viewer.git
+git clone https://github.com/Vansh-Shah/iis-log-viewer.git
 cd iis-log-viewer
 start index.html    # Windows
 open index.html     # macOS
